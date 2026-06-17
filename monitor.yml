@@ -1,0 +1,43 @@
+name: x-to-telegram
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # каждые 5 минут (минимум для GitHub Actions)
+  workflow_dispatch:          # ручной запуск кнопкой
+
+permissions:
+  contents: write             # нужно, чтобы коммитить state/last_seen.json
+
+concurrency:
+  group: x-monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Проверка новых твитов
+        env:
+          TWITTERAPI_KEY:     ${{ secrets.TWITTERAPI_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          TARGET_USERNAME:    blknoiz06
+          INCLUDE_REPLIES:    "false"
+          INCLUDE_RETWEETS:   "false"
+        run: python monitor.py
+
+      - name: Сохранить состояние
+        run: |
+          git config user.name  "github-actions"
+          git config user.email "actions@github.com"
+          git add state/last_seen.json
+          git diff --staged --quiet || git commit -m "update state"
+          git push || echo "нечего пушить"
