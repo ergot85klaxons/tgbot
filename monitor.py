@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """
 Telegram-уведомления о новых постах X (Twitter) аккаунта.
-
 Источник твитов: twitterapi.io (официальный ключ X НЕ нужен).
-Два режима:
-  python monitor.py          - однократная проверка (для GitHub Actions / cron)
-  python monitor.py --loop   - бесконечный цикл (для VPS / Raspberry Pi / ПК)
+  python monitor.py          - однократная проверка (GitHub Actions / cron)
+  python monitor.py --loop   - бесконечный цикл (VPS / Raspberry Pi / ПК)
 """
 import os
 import sys
@@ -18,7 +16,6 @@ import requests
 API_URL = "https://api.twitterapi.io/twitter/user/last_tweets"
 STATE_FILE = pathlib.Path(os.getenv("STATE_FILE", "state/last_seen.json"))
 
-# ---------- конфиг из переменных окружения ----------
 TWITTERAPI_KEY = os.environ["TWITTERAPI_KEY"]
 TG_TOKEN       = os.environ["TELEGRAM_BOT_TOKEN"]
 TG_CHAT_ID     = os.environ["TELEGRAM_CHAT_ID"]
@@ -26,7 +23,7 @@ TARGET         = os.getenv("TARGET_USERNAME", "blknoiz06").lstrip("@")
 
 INCLUDE_REPLIES  = os.getenv("INCLUDE_REPLIES",  "false").lower() == "true"
 INCLUDE_RETWEETS = os.getenv("INCLUDE_RETWEETS", "false").lower() == "true"
-POLL_INTERVAL    = int(os.getenv("POLL_INTERVAL", "120"))  # секунды, только для --loop
+POLL_INTERVAL    = int(os.getenv("POLL_INTERVAL", "120"))
 
 
 def log(*a):
@@ -41,7 +38,10 @@ def fetch_tweets():
         timeout=30,
     )
     r.raise_for_status()
-    return r.json().get("tweets") or []
+    data = r.json()
+    tweets = data.get("tweets") or []
+    log(f"API вернул {len(tweets)} твит(ов)")
+    return tweets
 
 
 def is_retweet(t):
@@ -66,12 +66,13 @@ def load_state():
 def save_state(last_id):
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps({"last_id": str(last_id)}))
+    log(f"Состояние сохранено: last_id={last_id}")
 
 
 def send_telegram(t):
     text = html.escape(t.get("text", ""))
     url  = t.get("url", "")
-    msg = f"🐦 <b>@{TARGET}</b> — новый пост\n\n{text}\n\n{url}"
+    msg = f"\U0001F426 <b>@{TARGET}</b> — новый пост\n\n{text}\n\n{url}"
     resp = requests.post(
         f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
         json={
@@ -86,35 +87,35 @@ def send_telegram(t):
 
 
 def check_once():
-    tweets = [t for t in fetch_tweets() if keep(t)]
+    tweets = fetch_tweets()
     if not tweets:
         return
-    # ID твитов — snowflake, числовая сортировка = хронология
     tweets.sort(key=lambda t: int(t["id"]))
+    newest_id = int(tweets[-1]["id"])
     last_seen = load_state()
 
-    # первый запуск: не спамим историей, просто фиксируем последний ID
     if last_seen is None:
-        save_state(tweets[-1]["id"])
-        log(f"Инициализация. Запомнил последний id={tweets[-1]['id']}")
+        save_state(newest_id)
+        log("Инициализация завершена.")
         return
 
     new = [t for t in tweets if int(t["id"]) > last_seen]
     if not new:
         return
 
-    sent_max = last_seen
+    cursor = last_seen
     for t in new:
-        try:
-            send_telegram(t)
-            sent_max = int(t["id"])
-            log(f"Отправлен твит {t['id']}")
-            time.sleep(1)  # бережём лимиты Telegram
-        except Exception as e:
-            log("Ошибка отправки в Telegram:", e)
-            break  # стейт сдвинем только до успешно отправленного — без дублей
-    if sent_max != last_seen:
-        save_state(sent_max)
+        if keep(t):
+            try:
+                send_telegram(t)
+                log(f"Отправлен твит {t['id']}")
+                time.sleep(1)
+            except Exception as e:
+                log("Ошибка отправки в Telegram:", e)
+                break
+        cursor = int(t["id"])
+    if cursor != last_seen:
+        save_state(cursor)
 
 
 def main():
