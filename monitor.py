@@ -30,6 +30,18 @@ def log(*a):
     print(time.strftime("[%Y-%m-%d %H:%M:%S]"), *a, flush=True)
 
 
+def extract_tweets(data):
+    """last_tweets может вернуть твиты на верхнем уровне ИЛИ внутри data.tweets."""
+    if isinstance(data.get("tweets"), list):
+        return data["tweets"]
+    d = data.get("data")
+    if isinstance(d, dict) and isinstance(d.get("tweets"), list):
+        return d["tweets"]
+    if isinstance(d, list):
+        return d
+    return []
+
+
 def fetch_tweets():
     r = requests.get(
         API_URL,
@@ -39,8 +51,10 @@ def fetch_tweets():
     )
     r.raise_for_status()
     data = r.json()
-    tweets = data.get("tweets") or []
+    tweets = extract_tweets(data)
     log(f"API вернул {len(tweets)} твит(ов)")
+    if not tweets:
+        log("Сырой ответ API:", json.dumps(data, ensure_ascii=False)[:600])
     return tweets
 
 
@@ -101,6 +115,7 @@ def check_once():
 
     new = [t for t in tweets if int(t["id"]) > last_seen]
     if not new:
+        log("Новых твитов нет.")
         return
 
     cursor = last_seen
